@@ -104,4 +104,19 @@ if uploaded_file is not None:
         c1, c2, c3, c4, c5 = st.columns(5)
         with c1: st.metric("説明会欠席", len(res1))
         with c2: st.metric("一次日程遅延", len(res2))
-        with c3: st.metric("検討中
+        with c3: st.metric("検討中フォロー", len(res3))
+        with c4: st.metric("結果未送付", len(res4))
+        with c5: st.metric("二次未確定", len(res5))
+
+        st.divider()
+        tabs = st.tabs(["説明会欠席", "一次遅延", "検討中", "結果未送付", "二次未確定"])
+        with tabs[0]: st.dataframe(res1[['Display_Name', map_b_date, map_b_st]], use_container_width=True)
+        with tabs[1]: st.dataframe(res2[['Display_Name', map_b_date, map_i1_d]], use_container_width=True)
+        with tabs[2]: st.dataframe(res3[['Display_Name', map_b_date, map_s_st]], use_container_width=True)
+        with tabs[3]: st.dataframe(res4[['Display_Name', map_i1_d, map_i1_r]], use_container_width=True)
+        with tabs[4]: st.dataframe(res5[['Display_Name', map_n_d, map_i2_d]], use_container_width=True)
+
+    except Exception as e:
+        st.error(f"解析エラー: 選択した列が正しいか確認してください。 ({e})")
+else:
+    st.info("サイドバーからCSVファイルをアップロードしてください。")
