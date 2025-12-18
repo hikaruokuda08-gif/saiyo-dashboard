@@ -77,7 +77,7 @@ with st.sidebar:
                 return default
 
             st.subheader("👤 氏名設定")
-            map_last_name = st.selectbox("「姓」の列", all_cols, index=get_idx(["姓", "氏名", "氏"], all_cols))
+            map_last_name = st.selectbox("「姓」（必須：予約数カウントの基準）", all_cols, index=get_idx(["姓", "氏名", "氏"], all_cols))
             map_first_name = st.selectbox("「名」の列", ["無し"] + all_cols, index=get_idx(["名"], ["無し"] + all_cols))
             
             st.subheader("📅 日程・状態設定")
@@ -96,7 +96,9 @@ with st.sidebar:
 # --- メインコンテンツ ---
 if uploaded_file is not None:
     try:
-        df = df_raw.copy()
+        # 【修正】氏名が入っていない行（空行など）をあらかじめ除外
+        df = df_raw.dropna(subset=[map_last_name]).copy()
+        
         if map_first_name == "無し":
             df['Display_Name'] = df[map_last_name].fillna('Unknown')
         else:
@@ -105,7 +107,7 @@ if uploaded_file is not None:
         today = datetime.now()
         df['dt_b'] = pd.to_datetime(df[map_b_date].apply(parse_jp_date))
 
-        # --- 1. 歩留率（Conversion Rate）分析 ---
+        # --- 1. 歩留率分析 ---
         st.subheader("📈 歩留まり分析")
         c_sel1, c_sel2 = st.columns(2)
         with c_sel1:
@@ -120,18 +122,18 @@ if uploaded_file is not None:
             else:
                 m_type = st.selectbox("指標", ["内定率（対一次合格）", "内定承諾率（対内定）"])
 
-        # 判定用フラグの作成
-        is_reserved = df[map_b_date].notna() # セミナー予約者
-        is_attended = df[map_b_st].str.contains('参加|出席', na=False) # 説明会参加者
-        is_wanted = df[map_s_st].str.contains('希望', na=False) # 選考希望者
-        is_interviewed = df[map_i1_d].notna() # 一次面接実施者
-        is_i1_passed = df[map_i1_r].str.contains('合格|通過|次へ', na=False) # 一次合格者
-        is_offered = df[map_final_st].str.contains('内定|合格', na=False) # 内定者
-        is_accepted = df[map_final_st].str.contains('承諾|入社', na=False) # 承諾者
+        # 判定用フラグ
+        # 予約数（分母の基準）: map_last_nameに値がある人（既にdropna済みなので全行対象）
+        is_attended = df[map_b_st].str.contains('参加|出席', na=False)
+        is_wanted = df[map_s_st].str.contains('希望', na=False)
+        is_interviewed = df[map_i1_d].notna()
+        is_i1_passed = df[map_i1_r].str.contains('合格|通過|次へ', na=False)
+        is_offered = df[map_final_st].str.contains('内定|合格', na=False)
+        is_accepted = df[map_final_st].str.contains('承諾|入社', na=False)
 
         num, den = 0, 0
         if stage == "セミナー予約":
-            den = len(df) # CSVの全体数 = 予約者数
+            den = len(df) # 氏名が記載されている有効な行数
             num = is_attended.sum() if "出席率" in m_type else den - is_attended.sum()
         elif stage == "説明会参加":
             den = is_attended.sum()
@@ -141,23 +143,24 @@ if uploaded_file is not None:
             num = is_i1_passed.sum() if "合格率" in m_type else den - is_i1_passed.sum()
         elif stage == "内定/承諾":
             if "内定率" in m_type:
-                den = is_i1_passed.sum() # 一次合格者のうち
-                num = is_offered.sum()   # 内定まで至った人
+                den = is_i1_passed.sum()
+                num = is_offered.sum()
             else:
-                den = is_offered.sum()   # 内定者のうち
-                num = is_accepted.sum()  # 承諾した人
+                den = is_offered.sum()
+                num = is_accepted.sum()
 
         if den > 0:
             val = (num / den) * 100
             st.metric(f"{stage} {m_type}", f"{val:.1f}%", f"母数: {den} 名 / 対象: {num} 名")
             st.progress(val / 100)
         else:
-            st.warning("分母となるデータが0件のため、算出できません。")
+            st.warning("有効な氏名データが不足しているため算出できません。")
 
-        # --- 2. 異常検知アラート（従来機能） ---
+        # --- 2. 異常検知アラート ---
         st.divider()
         st.subheader("🔍 フォロー対象アラート")
         res1 = df[(df['dt_b'] < today) & (~is_attended) & (df['dt_b'].notna())]
+        # 一次面接日程が入っていない希望者（予約日から14日経過）
         res2 = df[is_wanted & (df[map_i1_d].isna()) & ((today - df['dt_b']).dt.days >= 14)]
         
         ca1, ca2 = st.columns(2)
