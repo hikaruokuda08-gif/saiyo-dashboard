@@ -3,70 +3,38 @@ import pandas as pd
 from datetime import datetime, timedelta
 import re
 
-# 1. ページ設定（必ず最初に書く必要があります）
-st.set_page_config(page_title="RECRUITING DASHBOARD", layout="wide")
+# 1. ページ設定
+st.set_page_config(page_title="UNIVERSAL RECRUIT DASHBOARD", layout="wide")
 
-# 2. ログイン機能の定義
+# 2. ログイン機能
 def check_password():
-    """認証状態を確認し、未認証ならログイン画面を表示する"""
     if "authenticated" not in st.session_state:
         st.session_state["authenticated"] = False
-
-    # すでに認証済みならTrueを返して終了
     if st.session_state["authenticated"]:
         return True
 
-    # ログイン画面の表示
     st.markdown("<h2 style='text-align: center; color: #0366d6;'>🔐 RECRUIT DASHBOARD LOGIN</h2>", unsafe_allow_html=True)
-    
-    # SecretsからID/PASSを読み込む
     try:
-        target_id = st.secrets["USER_ID"]
-        target_pass = st.secrets["USER_PASSWORD"]
+        user_db = st.secrets["passwords"]
     except Exception:
-        st.error("システムエラー: Streamlitの管理画面(Secrets)でIDとパスワードが設定されていません。")
+        st.error("システムエラー: Secretsでパスワードリストを設定してください。")
         return False
 
     with st.form("login_form"):
         user_input = st.text_input("USER ID")
         password_input = st.text_input("PASSWORD", type="password")
-        submit_button = st.form_submit_button("LOGIN")
-        
-        if submit_button:
-            if user_input == target_id and password_input == target_pass:
+        if st.form_submit_button("LOGIN"):
+            if user_input in user_db and password_input == user_db[user_input]:
                 st.session_state["authenticated"] = True
                 st.rerun()
             else:
                 st.error("IDまたはパスワードが正しくありません")
     return False
 
-# 3. ログインチェックを実行（ログインしていない場合はここで止める）
 if not check_password():
     st.stop()
 
-# ==========================================
-# 成功時のみ：ここから下にダッシュボードの内容
-# ==========================================
-
-# ログアウトボタン
-if st.sidebar.button("ログアウト"):
-    st.session_state["authenticated"] = False
-    st.rerun()
-
-# --- CSSスタイル ---
-st.markdown("""
-    <style>
-    .stApp { background-color: #f0f2f6; font-family: 'Segoe UI', sans-serif; }
-    .metric-card {
-        background-color: #ffffff; padding: 20px; border-radius: 12px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05); border: 1px solid #e1e4e8; text-align: center;
-    }
-    .metric-label { font-size: 0.9rem; color: #586069; font-weight: 600; margin-bottom: 5px; }
-    .metric-value { font-size: 1.8rem; color: #0366d6; font-weight: 800; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# 判定ロジック関数
+# --- 日付変換ロジック ---
 def parse_jp_date(text, base_year=2025):
     if pd.isna(text) or text == '': return pd.NaT
     text = str(text)
@@ -78,62 +46,86 @@ def parse_jp_date(text, base_year=2025):
         return datetime(base_year + 1 if m <= 3 else base_year, m, d)
     return pd.NaT
 
-st.markdown("# 📊 採用進捗エグゼクティブ・ダッシュボード")
-st.markdown("---")
-
-# サイドバー
+# --- サイドバー：データコントロール ---
 with st.sidebar:
-    st.header("⚙️ DATA CONTROL")
+    st.header("📂 DATA IMPORT")
     uploaded_file = st.file_uploader("CSVをアップロード", type=['csv'])
-    today = datetime.now()
-    st.info(f"基準日: {today.strftime('%Y/%m/%d')}")
+    st.divider()
+    if st.button("ログアウト"):
+        st.session_state["authenticated"] = False
+        st.rerun()
 
 if uploaded_file is not None:
     try:
-        df = pd.read_csv(uploaded_file)
-        df['氏名'] = df['姓'].fillna('') + ' ' + df['名'].fillna('')
+        # 一旦データを読み込む
+        df_raw = pd.read_csv(uploaded_file)
+        all_cols = df_raw.columns.tolist()
+
+        # --- カラムマッピングUI ---
+        st.sidebar.header("🎯 COLUMN MAPPING")
+        st.sidebar.info("CSVの項目と解析項目を紐付けてください")
         
-        # カラム設定
-        COL_B = '説明会\n予約日'
-        COL_B_ST = '説明会参加\nオープンカンパニー'
-        COL_S_ST = '選考希望'
-        COL_I1_D = '【一次選考】\n日程\n（入力例：11月4日(火)14:00開始）'
-        COL_I1_R = '【一次選考】\n結果'
-        COL_N_D = '【二次選考】\n案内メール\n送付' 
-        COL_I2_D = '【二次選考】\n最終選考日程\n（入力例：11月4日(火)14:00開始）'
+        # 自動推測機能付きのセレクトボックス
+        def get_idx(keywords, col_list):
+            for i, col in enumerate(col_list):
+                if any(k in col for k in keywords): return i
+            return 0
 
-        df['dt_b'] = pd.to_datetime(df[COL_B].apply(parse_jp_date))
-        df['dt_i1'] = pd.to_datetime(df[COL_I1_D].apply(parse_jp_date))
-        df['dt_n'] = pd.to_datetime(df[COL_N_D].apply(parse_jp_date))
-        df['dt_i2'] = pd.to_datetime(df[COL_I2_D].apply(parse_jp_date))
+        map_name = st.sidebar.selectbox("氏名(または姓)の列", all_cols, index=get_idx(["氏名", "姓名", "姓"], all_cols))
+        map_b_date = st.sidebar.selectbox("説明会予約日の列", all_cols, index=get_idx(["説明会", "予約日", "セミナー"], all_cols))
+        map_b_st = st.sidebar.selectbox("説明会参加状態の列", all_cols, index=get_idx(["参加", "出席"], all_cols))
+        map_s_st = st.sidebar.selectbox("選考希望状態の列", all_cols, index=get_idx(["希望", "ステータス"], all_cols))
+        map_i1_d = st.sidebar.selectbox("一次選考日程の列", all_cols, index=get_idx(["一次", "1次", "面接日"], all_cols))
+        map_i1_r = st.sidebar.selectbox("一次選考結果の列", all_cols, index=get_idx(["結果", "合否"], all_cols))
+        map_n_d = st.sidebar.selectbox("二次案内メール送付日の列", all_cols, index=get_idx(["案内", "送付"], all_cols))
+        map_i2_d = st.sidebar.selectbox("二次選考日程の列", all_cols, index=get_idx(["二次", "最終"], all_cols))
 
-        res1 = df[(df['dt_b'] < today) & (df[COL_B_ST] != '参加') & (df['dt_b'].notna())]
-        df_t2 = df[df[COL_S_ST] == '希望'].copy()
-        df_t2['gap'] = (df_t2['dt_i1'] - df_t2['dt_b']).dt.days
+        # データの加工
+        df = df_raw.copy()
+        df['Display_Name'] = df[map_name].fillna('Unknown')
+        today = datetime.now()
+
+        # 日付変換
+        df['dt_b'] = pd.to_datetime(df[map_b_date].apply(parse_jp_date))
+        df['dt_i1'] = pd.to_datetime(df[map_i1_d].apply(parse_jp_date))
+        df['dt_n'] = pd.to_datetime(df[map_n_d].apply(parse_jp_date))
+
+        # --- 解析ロジック ---
+        res1 = df[(df['dt_b'] < today) & (df[map_b_st] != '参加') & (df['dt_b'].notna())]
+        
+        df_t2 = df[df[map_s_st].str.contains('希望', na=False)].copy()
         df_t2['elap'] = (today - df_t2['dt_b']).dt.days
-        res2 = df_t2[(df_t2['gap'] >= 14) | ((df_t2['dt_i1'].isna()) & (df_t2['elap'] >= 14))]
-        df_t3 = df[df[COL_S_ST] == '考え中'].copy()
-        df_t3['elap'] = (today - df_t3['dt_b']).dt.days
-        res3 = df_t3[df_t3['elap'] >= 10]
-        res4 = df[(df['dt_i1'] <= (today - timedelta(days=3))) & (df[COL_I1_R].isna()) & (df['dt_i1'].notna())]
-        df_t5 = df.copy(); df_t5['elap_n'] = (today - df_t5['dt_n']).dt.days
-        res5 = df_t5[(df_t5['elap_n'] >= 7) & (df_t5['dt_i2'].isna()) & (df_t5['dt_n'].notna())]
-
-        c1, c2, c3, c4, c5 = st.columns(5)
-        with c1: st.markdown(f"<div class='metric-card'><div class='metric-label'>説明会欠席</div><div class='metric-value'>{len(res1)}</div></div>", unsafe_allow_html=True)
-        with c2: st.markdown(f"<div class='metric-card'><div class='metric-label'>一次日程遅延</div><div class='metric-value'>{len(res2)}</div></div>", unsafe_allow_html=True)
-        with c3: st.markdown(f"<div class='metric-card'><div class='metric-label'>検討中フォロー</div><div class='metric-value'>{len(res3)}</div></div>", unsafe_allow_html=True)
-        with c4: st.markdown(f"<div class='metric-card'><div class='metric-label'>結果未送付</div><div class='metric-value'>{len(res4)}</div></div>", unsafe_allow_html=True)
-        with c5: st.markdown(f"<div class='metric-card'><div class='metric-label'>二次未確定</div><div class='metric-value'>{len(res5)}</div></div>", unsafe_allow_html=True)
-
-        st.markdown("### 🔍 アラート詳細分析")
-        target_tab = st.radio("表示アラート", ["説明会欠席", "一次日程遅延", "検討中フォロー", "結果未送付", "二次未確定"], horizontal=True)
+        res2 = df_t2[(df_t2['elap'] >= 14) & (df_t2[map_i1_d].isna())]
         
-        if target_tab == "説明会欠席": st.dataframe(res1[['氏名', COL_B, COL_B_ST]], use_container_width=True)
-        elif target_tab == "一次日程遅延": st.dataframe(res2[['氏名', COL_B, COL_I1_D]], use_container_width=True)
-        elif target_tab == "検討中フォロー": st.dataframe(res3[['氏名', COL_B, COL_S_ST]], use_container_width=True)
-        elif target_tab == "結果未送付": st.dataframe(res4[['氏名', COL_I1_D, COL_I1_R]], use_container_width=True)
-        elif target_tab == "二次未確定": st.dataframe(res5[['氏名', COL_N_D, COL_I2_D]], use_container_width=True)
+        df_t3 = df[df[map_s_st].str.contains('考え中|検討', na=False)].copy()
+        res3 = df_t3[(today - df_t3['dt_b']).dt.days >= 10]
+        
+        res4 = df[(df['dt_i1'] <= (today - timedelta(days=3))) & (df[map_i1_r].isna()) & (df['dt_i1'].notna())]
+        
+        df_t5 = df.copy()
+        df_t5['elap_n'] = (today - pd.to_datetime(df_t5[map_n_d].apply(parse_jp_date))).dt.days
+        res5 = df_t5[(df_t5['elap_n'] >= 7) & (df[map_i2_d].isna()) & (df[map_n_d].notna())]
+
+        # --- ダッシュボード表示 ---
+        st.markdown(f"# 📊 採用進捗分析: {uploaded_file.name}")
+        
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1: st.metric("説明会欠席", len(res1))
+        with c2: st.metric("一次日程遅延", len(res2))
+        with c3: st.metric("検討中フォロー", len(res3))
+        with c4: st.metric("結果未送付", len(res4))
+        with c5: st.metric("二次未確定", len(res5))
+
+        st.divider()
+        tabs = st.tabs(["説明会欠席", "一次遅延", "検討中", "結果未送付", "二次未確定"])
+        
+        with tabs[0]: st.dataframe(res1[['Display_Name', map_b_date, map_b_st]], use_container_width=True)
+        with tabs[1]: st.dataframe(res2[['Display_Name', map_b_date, map_i1_d]], use_container_width=True)
+        with tabs[2]: st.dataframe(res3[['Display_Name', map_b_date, map_s_st]], use_container_width=True)
+        with tabs[3]: st.dataframe(res4[['Display_Name', map_i1_d, map_i1_r]], use_container_width=True)
+        with tabs[4]: st.dataframe(res5[['Display_Name', map_n_d, map_i2_d]], use_container_width=True)
 
     except Exception as e:
-        st.error(f"データ解析エラー: {e}")
+        st.error(f"解析エラー: 選択した列が正しいか確認してください。 ({e})")
+else:
+    st.info("サイドバーからCSVファイルをアップロードしてください。")
