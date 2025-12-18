@@ -6,7 +6,7 @@ import re
 # 1. ページ設定
 st.set_page_config(page_title="UNIVERSAL RECRUIT DASHBOARD", layout="wide")
 
-# 2. ログイン機能（以前の1人分用に戻しました）
+# 2. ログイン機能（1人分用）
 def check_password():
     if "authenticated" not in st.session_state:
         st.session_state["authenticated"] = False
@@ -15,7 +15,6 @@ def check_password():
 
     st.markdown("<h2 style='text-align: center; color: #0366d6;'>🔐 RECRUIT DASHBOARD LOGIN</h2>", unsafe_allow_html=True)
     
-    # Secretsから以前と同じ「USER_ID」「USER_PASSWORD」を読み込む
     try:
         target_id = st.secrets["USER_ID"]
         target_pass = st.secrets["USER_PASSWORD"]
@@ -65,30 +64,40 @@ if uploaded_file is not None:
 
         st.sidebar.header("🎯 COLUMN MAPPING")
         
-        def get_idx(keywords, col_list):
+        def get_idx(keywords, col_list, default=0):
             for i, col in enumerate(col_list):
                 if any(k in col for k in keywords): return i
-            return 0
+            return default
 
-        # カラム選択機能
-        map_name = st.sidebar.selectbox("氏名(または姓)の列", all_cols, index=get_idx(["氏名", "姓名", "姓"], all_cols))
-        map_b_date = st.sidebar.selectbox("説明会予約日の列", all_cols, index=get_idx(["説明会", "予約日", "セミナー"], all_cols))
-        map_b_st = st.sidebar.selectbox("説明会参加状態の列", all_cols, index=get_idx(["参加", "出席"], all_cols))
-        map_s_st = st.sidebar.selectbox("選考希望状態の列", all_cols, index=get_idx(["希望", "ステータス"], all_cols))
-        map_i1_d = st.sidebar.selectbox("一次選考日程の列", all_cols, index=get_idx(["一次", "1次", "面接日"], all_cols))
-        map_i1_r = st.sidebar.selectbox("一次選考結果の列", all_cols, index=get_idx(["結果", "合否"], all_cols))
-        map_n_d = st.sidebar.selectbox("二次案内メール送付日の列", all_cols, index=get_idx(["案内", "送付"], all_cols))
-        map_i2_d = st.sidebar.selectbox("二次選考日程の列", all_cols, index=get_idx(["二次", "最終"], all_cols))
+        # 【修正ポイント】姓名それぞれの列を選択できるように変更
+        st.sidebar.subheader("👤 氏名設定")
+        map_last_name = st.sidebar.selectbox("「姓」（または氏名）の列", all_cols, index=get_idx(["姓", "氏名", "氏", "名前"], all_cols))
+        map_first_name = st.sidebar.selectbox("「名」の列（無い場合は『無し』を選択）", ["無し"] + all_cols, index=get_idx(["名"], ["無し"] + all_cols))
 
+        st.sidebar.subheader("📅 日付・状態設定")
+        map_b_date = st.sidebar.selectbox("説明会予約日", all_cols, index=get_idx(["説明会", "予約日", "セミナー"], all_cols))
+        map_b_st = st.sidebar.selectbox("説明会参加状態", all_cols, index=get_idx(["参加", "出席"], all_cols))
+        map_s_st = st.sidebar.selectbox("選考希望状態", all_cols, index=get_idx(["希望", "ステータス"], all_cols))
+        map_i1_d = st.sidebar.selectbox("一次選考日程", all_cols, index=get_idx(["一次", "1次", "面接日"], all_cols))
+        map_i1_r = st.sidebar.selectbox("一次選考結果", all_cols, index=get_idx(["結果", "合否"], all_cols))
+        map_n_d = st.sidebar.selectbox("二次案内メール送付日", all_cols, index=get_idx(["案内", "送付"], all_cols))
+        map_i2_d = st.sidebar.selectbox("二次選考日程", all_cols, index=get_idx(["二次", "最終"], all_cols))
+
+        # 【修正ポイント】姓名を結合して「Display_Name」を作成
         df = df_raw.copy()
-        df['Display_Name'] = df[map_name].fillna('Unknown')
+        if map_first_name == "無し":
+            df['Display_Name'] = df[map_last_name].fillna('Unknown')
+        else:
+            df['Display_Name'] = df[map_last_name].fillna('') + ' ' + df[map_first_name].fillna('')
+        
         today = datetime.now()
 
+        # 日付変換
         df['dt_b'] = pd.to_datetime(df[map_b_date].apply(parse_jp_date))
         df['dt_i1'] = pd.to_datetime(df[map_i1_d].apply(parse_jp_date))
         df['dt_n'] = pd.to_datetime(df[map_n_d].apply(parse_jp_date))
 
-        # 解析ロジック
+        # --- 解析ロジック ---
         res1 = df[(df['dt_b'] < today) & (df[map_b_st] != '参加') & (df['dt_b'].notna())]
         df_t2 = df[df[map_s_st].str.contains('希望', na=False)].copy()
         df_t2['elap'] = (today - df_t2['dt_b']).dt.days
@@ -100,6 +109,7 @@ if uploaded_file is not None:
         df_t5['elap_n'] = (today - pd.to_datetime(df_t5[map_n_d].apply(parse_jp_date))).dt.days
         res5 = df_t5[(df_t5['elap_n'] >= 7) & (df[map_i2_d].isna()) & (df[map_n_d].notna())]
 
+        # --- 表示 ---
         st.markdown(f"# 📊 採用進捗分析: {uploaded_file.name}")
         c1, c2, c3, c4, c5 = st.columns(5)
         with c1: st.metric("説明会欠席", len(res1))
@@ -117,6 +127,6 @@ if uploaded_file is not None:
         with tabs[4]: st.dataframe(res5[['Display_Name', map_n_d, map_i2_d]], use_container_width=True)
 
     except Exception as e:
-        st.error(f"解析エラー: 選択した列が正しいか確認してください。 ({e})")
+        st.error(f"解析エラー: 選択した列を確認してください。 ({e})")
 else:
     st.info("サイドバーからCSVファイルをアップロードしてください。")
