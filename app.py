@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import re
 
-# 1. ページ設定（ブラウザのタブに表示される名前）
+# 1. ページ設定
 st.set_page_config(page_title="n8-Flow | Recruitment Analytics", layout="wide")
 
 # 2. ログイン機能
@@ -12,15 +12,13 @@ def check_password():
         st.session_state["authenticated"] = False
     if st.session_state["authenticated"]:
         return True
-
     st.markdown("<h2 style='text-align: center; color: #0366d6;'>🔐 n8-Flow LOGIN</h2>", unsafe_allow_html=True)
     try:
         target_id = st.secrets["USER_ID"]
         target_pass = st.secrets["USER_PASSWORD"]
     except Exception:
-        st.error("システムエラー: Secretsの設定を確認してください。")
+        st.error("Secretsの設定を確認してください。")
         return False
-
     with st.form("login_form"):
         user_input = st.text_input("USER ID")
         password_input = st.text_input("PASSWORD", type="password")
@@ -35,21 +33,18 @@ def check_password():
 if not check_password():
     st.stop()
 
-# --- ヘッダー部分：ロゴとプロダクト名 ---
+# --- ヘッダー ---
 col_logo, col_title = st.columns([1, 4])
 with col_logo:
-    # 先ほどGitHubにアップしたファイル名に合わせてください。
-    # もし名前を "logo.jpg" に変えていない場合は、ここを "LOGO_Y(1).jpg" に書き換えてください。
     try:
-        st.image("logo.jpg", width=150) 
+        st.image("logo.jpg", width=150)
     except:
         try:
             st.image("LOGO_Y(1).jpg", width=150)
         except:
-            st.warning("ロゴ画像ファイルが見つかりません。GitHubのファイル名を確認してください。")
+            st.write("---")
 
 with col_title:
-    # プロダクト名を大きく表示
     st.markdown("<h1 style='margin-bottom: 0;'>n8-Flow <span style='font-size: 0.6em; color: #666;'>（エイト・フロー）</span></h1>", unsafe_allow_html=True)
     st.caption("Strategic Recruitment Analytics Dashboard | powered by number eight Inc.")
 
@@ -81,15 +76,17 @@ with st.sidebar:
                     if any(k in col for k in keywords): return i
                 return default
 
+            st.subheader("👤 氏名設定")
             map_last_name = st.selectbox("「姓」の列", all_cols, index=get_idx(["姓", "氏名", "氏"], all_cols))
             map_first_name = st.selectbox("「名」の列", ["無し"] + all_cols, index=get_idx(["名"], ["無し"] + all_cols))
-            map_b_date = st.selectbox("説明会予約日", all_cols, index=get_idx(["予約日", "説明会"], all_cols))
+            
+            st.subheader("📅 日程・状態設定")
+            map_b_date = st.selectbox("説明会/セミナー予約日", all_cols, index=get_idx(["予約日", "説明会", "セミナー"], all_cols))
             map_b_st = st.selectbox("説明会参加状態", all_cols, index=get_idx(["参加", "出席"], all_cols))
-            map_s_st = st.selectbox("選考希望状態", all_cols, index=get_idx(["希望", "ステータス"], all_cols))
-            map_i1_d = st.selectbox("一次選考日程", all_cols, index=get_idx(["一次", "1次", "面接日"], all_cols))
-            map_i1_r = st.selectbox("一次選考結果", all_cols, index=get_idx(["結果", "合否"], all_cols))
-            map_n_d = st.selectbox("二次案内日", all_cols, index=get_idx(["案内", "送付"], all_cols))
-            map_i2_d = st.selectbox("二次選考日程", all_cols, index=get_idx(["最終", "二次"], all_cols))
+            map_s_st = st.selectbox("選考希望/ステータス", all_cols, index=get_idx(["希望", "状態"], all_cols))
+            map_i1_d = st.selectbox("一次選考日程", all_cols, index=get_idx(["一次", "1次", "面接"], all_cols))
+            map_i1_r = st.selectbox("選考結果（合否）", all_cols, index=get_idx(["結果", "合否"], all_cols))
+            map_final_st = st.selectbox("最終結果/承諾状態", all_cols, index=get_idx(["最終", "承諾", "ステータス"], all_cols))
     
     st.divider()
     if st.button("ログアウト"):
@@ -100,7 +97,6 @@ with st.sidebar:
 if uploaded_file is not None:
     try:
         df = df_raw.copy()
-        # 姓名合体表示
         if map_first_name == "無し":
             df['Display_Name'] = df[map_last_name].fillna('Unknown')
         else:
@@ -108,65 +104,71 @@ if uploaded_file is not None:
         
         today = datetime.now()
         df['dt_b'] = pd.to_datetime(df[map_b_date].apply(parse_jp_date))
-        df['dt_i1'] = pd.to_datetime(df[map_i1_d].apply(parse_jp_date))
 
-        # --- 歩留率分析 ---
-        st.subheader("📈 歩留まり（Conversion Rate）分析")
+        # --- 1. 歩留率（Conversion Rate）分析 ---
+        st.subheader("📈 歩留まり分析")
         c_sel1, c_sel2 = st.columns(2)
         with c_sel1:
-            stage = st.selectbox("分析フェーズ", ["説明会", "選考希望", "1次選考"])
+            stage = st.selectbox("分析フェーズ", ["セミナー予約", "説明会参加", "一次選考", "内定/承諾"])
         with c_sel2:
-            if stage == "説明会":
-                m_type = st.selectbox("指標", ["参加率", "欠席率"])
-            elif stage == "選考希望":
-                m_type = st.selectbox("指標", ["希望率", "辞退・検討率"])
+            if stage == "セミナー予約":
+                m_type = st.selectbox("指標", ["出席率（対予約）", "欠席率（対予約）"])
+            elif stage == "説明会参加":
+                m_type = st.selectbox("指標", ["選考希望率（対参加）", "辞退率（対参加）"])
+            elif stage == "一次選考":
+                m_type = st.selectbox("指標", ["一次合格率（対一次参加）", "一次辞退率（対一次参加）"])
             else:
-                m_type = st.selectbox("指標", ["面接参加率", "合格率", "辞退率"])
+                m_type = st.selectbox("指標", ["内定率（対一次合格）", "内定承諾率（対内定）"])
 
-        is_attended = df[map_b_st].str.contains('参加|出席', na=False)
-        is_wanted = df[map_s_st].str.contains('希望', na=False)
-        is_interviewed = df[map_i1_d].notna()
-        is_passed = df[map_i1_r].str.contains('合格|通過|次へ', na=False)
-        is_withdrawn = df[map_i1_r].str.contains('辞退', na=False) | df[map_s_st].str.contains('辞退', na=False)
+        # 判定用フラグの作成
+        is_reserved = df[map_b_date].notna() # セミナー予約者
+        is_attended = df[map_b_st].str.contains('参加|出席', na=False) # 説明会参加者
+        is_wanted = df[map_s_st].str.contains('希望', na=False) # 選考希望者
+        is_interviewed = df[map_i1_d].notna() # 一次面接実施者
+        is_i1_passed = df[map_i1_r].str.contains('合格|通過|次へ', na=False) # 一次合格者
+        is_offered = df[map_final_st].str.contains('内定|合格', na=False) # 内定者
+        is_accepted = df[map_final_st].str.contains('承諾|入社', na=False) # 承諾者
 
         num, den = 0, 0
-        if stage == "説明会":
-            den = df[map_b_date].notna().sum()
-            num = is_attended.sum() if m_type == "参加率" else den - is_attended.sum()
-        elif stage == "選考希望":
+        if stage == "セミナー予約":
+            den = len(df) # CSVの全体数 = 予約者数
+            num = is_attended.sum() if "出席率" in m_type else den - is_attended.sum()
+        elif stage == "説明会参加":
             den = is_attended.sum()
-            num = is_wanted.sum() if m_type == "希望率" else den - is_wanted.sum()
-        elif stage == "1次選考":
-            if m_type == "面接参加率":
-                den, num = is_wanted.sum(), is_interviewed.sum()
-            elif m_type == "合格率":
-                den, num = is_interviewed.sum(), is_passed.sum()
+            num = is_wanted.sum() if "希望率" in m_type else den - is_wanted.sum()
+        elif stage == "一次選考":
+            den = is_interviewed.sum()
+            num = is_i1_passed.sum() if "合格率" in m_type else den - is_i1_passed.sum()
+        elif stage == "内定/承諾":
+            if "内定率" in m_type:
+                den = is_i1_passed.sum() # 一次合格者のうち
+                num = is_offered.sum()   # 内定まで至った人
             else:
-                den, num = is_interviewed.sum(), is_withdrawn.sum()
+                den = is_offered.sum()   # 内定者のうち
+                num = is_accepted.sum()  # 承諾した人
 
         if den > 0:
             val = (num / den) * 100
-            st.metric(f"{stage}の{m_type}", f"{val:.1f}%", f"全体 {den} 名中 {num} 名")
+            st.metric(f"{stage} {m_type}", f"{val:.1f}%", f"母数: {den} 名 / 対象: {num} 名")
             st.progress(val / 100)
         else:
-            st.warning("データが不足しています。")
+            st.warning("分母となるデータが0件のため、算出できません。")
 
-        # --- アラート ---
+        # --- 2. 異常検知アラート（従来機能） ---
         st.divider()
         st.subheader("🔍 フォロー対象アラート")
         res1 = df[(df['dt_b'] < today) & (~is_attended) & (df['dt_b'].notna())]
-        df_t2 = df[is_wanted].copy()
-        res2 = df_t2[((today - df_t2['dt_b']).dt.days >= 14) & (df_t2[map_i1_d].isna())]
+        res2 = df[is_wanted & (df[map_i1_d].isna()) & ((today - df['dt_b']).dt.days >= 14)]
         
         ca1, ca2 = st.columns(2)
         with ca1:
             st.error(f"説明会欠席: {len(res1)}名")
             if len(res1) > 0: st.dataframe(res1[['Display_Name', map_b_date]], use_container_width=True)
         with ca2:
-            st.warning(f"一次日程遅延: {len(res2)}名")
+            st.warning(f"一次日程未設定（希望後14日〜）: {len(res2)}名")
             if len(res2) > 0: st.dataframe(res2[['Display_Name', map_b_date]], use_container_width=True)
 
     except Exception as e:
-        st.error(f"エラーが発生しました: {e}")
+        st.error(f"解析エラー: {e}")
 else:
     st.info("サイドバーからCSVファイルをアップロードしてください。")
