@@ -53,32 +53,28 @@ st.divider()
 def parse_jp_date(text, base_year=2025):
     if pd.isna(text) or text == '': return pd.NaT
     text = str(text)
-    # yyyy/mm/dd 形式
     match_ymd = re.search(r'(\d{4})/(\d{1,2})/(\d{1,2})', text)
     if match_ymd: return datetime(int(match_ymd.group(1)), int(match_ymd.group(2)), int(match_ymd.group(3)))
-    # mm月dd日 形式
     match_md = re.search(r'(\d{1,2})月(\d{1,2})日', text)
     if match_md:
         m, d = int(match_md.group(1)), int(match_md.group(2))
         return datetime(base_year + 1 if m <= 3 else base_year, m, d)
     return pd.NaT
 
-# --- サイドバー：データコントロール ---
+# --- サイドバー ---
 with st.sidebar:
     st.header("📂 DATA IMPORT")
     uploaded_file = st.file_uploader("CSVをアップロード", type=['csv'])
     
     if uploaded_file is not None:
-        # 初回読み込み
         try:
             df_raw = pd.read_csv(uploaded_file)
             all_cols = df_raw.columns.tolist()
         except Exception as e:
-            st.error(f"CSVの読み込み自体に失敗しました: {e}")
+            st.error(f"CSV読み込みエラー: {e}")
             st.stop()
 
         with st.expander("🛠 詳細カラムマッピング", expanded=True):
-            st.caption("各分析に必要な列を紐付けてください")
             def get_idx(keywords, col_list, default=0):
                 for i, col in enumerate(col_list):
                     if any(k in col for k in keywords): return i
@@ -115,18 +111,23 @@ with st.sidebar:
 # --- 解析実行 ---
 if uploaded_file is not None:
     try:
-        # データクレンジング
         df = df_raw.dropna(subset=[m_last]).copy()
         df['FullName'] = df[m_last].fillna('') + (' ' + df[m_first].fillna('') if m_first != "無し" else '')
         today = datetime.now()
 
-        # 日付の一括変換
+        # 【超重要】エラー対策：すべての判定用列を強制的に「文字列」に変換
+        target_cols = [m_b_st, m_chk_ank, m_chk_tel, m_chk_mail, m_s_st, m_resume, m_i1_r, m_i2_r, m_if_r]
+        for col in target_cols:
+            df[col] = df[col].astype(str).replace('nan', '')
+
+        # 日付変換
         df['dt_b'] = pd.to_datetime(df[m_b_date].apply(parse_jp_date))
         df['dt_i1'] = pd.to_datetime(df[m_i1_d].apply(parse_jp_date))
         df['dt_i2'] = pd.to_datetime(df[m_i2_d].apply(parse_jp_date))
         df['dt_if'] = pd.to_datetime(df[m_if_d].apply(parse_jp_date))
 
-        # --- 判定フラグの作成 ---
+        # --- 判定フラグ ---
+        # 1次欠席・当日欠席を辞退として扱う
         is_i1_absent = df[m_i1_r].str.contains('欠席|当日', na=False)
         is_withdrawn_any = (
             df[m_b_st].str.contains('辞退', na=False) | 
@@ -138,27 +139,19 @@ if uploaded_file is not None:
         is_attended = df[m_b_st].str.contains('参加|出席', na=False) & ~df[m_b_st].str.contains('不参加|欠席|辞退', na=False)
         is_wanted = df[m_s_st].str.contains('希望', na=False) & ~is_withdrawn_any
 
-        # --- 1. 歩留まり分析セクション ---
+        # --- 歩留まり分析 ---
         st.subheader("📈 歩留まり分析")
-        c_sel1, c_sel2 = st.columns(2)
-        with c_sel1:
-            stage = st.selectbox("分析フェーズ", ["セミナー予約", "説明会参加", "一次選考", "内定/承諾"])
-        with c_sel2:
-            options = {
-                "セミナー予約": ["出席率", "欠席率"],
-                "説明会参加": ["希望率", "辞退率"],
-                "一次選考": ["合格率", "辞退率（欠席込）"],
-                "内定/承諾": ["内定率", "承諾率"]
-            }
-            m_type = st.selectbox("指標", options[stage])
+        cs1, cs2 = st.columns(2)
+        with cs1: stage = st.selectbox("分析フェーズ", ["セミナー予約", "説明会参加", "一次選考", "内定/承諾"])
+        with cs2:
+            opts = {"セミナー予約":["出席率","欠席率"], "説明会参加":["希望率","辞退率"], "一次選考":["合格率","辞退率"], "内定/承諾":["内定率","承諾率"]}
+            m_type = st.selectbox("指標", opts[stage])
 
         num, den = 0, 0
         if stage == "セミナー予約":
-            den = len(df)
-            num = is_attended.sum() if "出席率" in m_type else den - is_attended.sum()
+            den = len(df); num = is_attended.sum() if "出席率" in m_type else den - is_attended.sum()
         elif stage == "説明会参加":
-            den = is_attended.sum()
-            num = is_wanted.sum() if "希望率" in m_type else is_withdrawn_any[is_attended].sum()
+            den = is_attended.sum(); num = is_wanted.sum() if "希望率" in m_type else is_withdrawn_any[is_attended].sum()
         elif stage == "一次選考":
             den = (df[m_i1_d].notna()).sum()
             num = (df[m_i1_r].str.contains('合格|通過', na=False)).sum() if "合格率" in m_type else is_withdrawn_any[df[m_i1_d].notna()].sum()
@@ -170,36 +163,23 @@ if uploaded_file is not None:
             val = (num / den) * 100
             st.metric(f"{stage} {m_type}", f"{val:.1f}%", f"母数: {den} / 対象: {num}")
             st.progress(val / 100)
-        else:
-            st.warning("このフェーズに該当するデータがまだありません。")
 
-        # --- 2. 重点フォローアラート ---
+        # --- 重点フォローアラート ---
         st.divider()
         st.subheader("🚨 重点フォローアラート")
-
-        # アラート1: 開催3日前未確認
-        alert1 = df[
-            (df['dt_b'].notna()) & (df['dt_b'] <= today + timedelta(days=3)) & (df['dt_b'] >= today) &
-            (~df[m_chk_ank].astype(str).str.contains('済|確', na=False)) &
-            (~df[m_chk_tel].astype(str).str.contains('済|確', na=False)) &
-            (~df[m_chk_mail].astype(str).str.contains('済|既', na=False))
-        ]
-
-        # アラート2: 日程未設定10日経過
+        
+        # 1. 開催3日前未確認
+        alert1 = df[(df['dt_b'].notna()) & (df['dt_b'] <= today + timedelta(days=3)) & (df['dt_b'] >= today) &
+                    (~df[m_chk_ank].str.contains('済|確', na=False)) & (~df[m_chk_tel].str.contains('済|確', na=False)) & (~df[m_chk_mail].str.contains('済|既', na=False))]
+        # 2. 日程未設定10日経過
         alert2 = df[is_wanted & (df[m_i1_d].isna()) & ((today - df['dt_b']).dt.days >= 10)]
-
-        # アラート3: 面接結果入力漏れ
-        a3_i1 = df[(df['dt_i1'] <= today - timedelta(days=3)) & (df[m_i1_r].isna())]
-        a3_i2 = df[(df['dt_i2'] <= today - timedelta(days=3)) & (df[m_i2_r].isna())]
-        a3_if = df[(df['dt_if'] <= today - timedelta(days=3)) & (df[m_if_r].isna())]
+        # 3. 面接結果入力漏れ
+        a3_i1 = df[(df['dt_i1'] <= today - timedelta(days=3)) & (df[m_i1_r] == '')]
+        a3_i2 = df[(df['dt_i2'] <= today - timedelta(days=3)) & (df[m_i2_r] == '')]
+        a3_if = df[(df['dt_if'] <= today - timedelta(days=3)) & (df[m_if_r] == '')]
         alert3 = pd.concat([a3_i1, a3_i2, a3_if]).drop_duplicates()
-
-        # アラート4: 履歴書未回収
-        alert4 = df[
-            (df['dt_i1'] <= today - timedelta(days=3)) & 
-            (~df[m_resume].astype(str).str.contains('済み', na=False)) &
-            (~is_withdrawn_any)
-        ]
+        # 4. 書類未回収
+        alert4 = df[(df['dt_i1'] <= today - timedelta(days=3)) & (~df[m_resume].str.contains('済み', na=False)) & (~is_withdrawn_any)]
 
         t1, t2, t3, t4 = st.tabs([f"開催前未確認 ({len(alert1)})", f"日程未設定 ({len(alert2)})", f"結果未入力 ({len(alert3)})", f"書類未回収 ({len(alert4)})"])
         with t1: st.dataframe(alert1[['FullName', m_b_date, m_chk_ank, m_chk_tel, m_chk_mail]], use_container_width=True)
@@ -208,8 +188,7 @@ if uploaded_file is not None:
         with t4: st.dataframe(alert4[['FullName', m_i1_d, m_resume]], use_container_width=True)
 
     except Exception as e:
-        st.error(f"⚠️ 解析中にエラーが発生しました。サイドバーのカラム設定が正しいか確認してください。")
-        with st.expander("技術的なエラー詳細"):
-            st.write(e)
+        st.error(f"⚠️ 解析中にエラーが発生しました。設定を確認してください。")
+        st.exception(e)
 else:
-    st.info("サイドバーからCSVファイルをアップロードしてください。")
+    st.info("CSVをアップロードしてください。")
