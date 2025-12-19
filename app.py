@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import re
+import os
 
 # 1. ページ設定
 st.set_page_config(page_title="n8-Flow | Recruitment Analytics", layout="wide")
@@ -33,16 +34,15 @@ def check_password():
 if not check_password():
     st.stop()
 
-# --- ヘッダー ---
+# --- ヘッダー部分：ロゴとプロダクト名（消えないように固定） ---
 col_logo, col_title = st.columns([1, 4])
 with col_logo:
-    try:
-        st.image("logo.jpg", width=150)
-    except:
-        try:
-            st.image("LOGO_Y(1).jpg", width=150)
-        except:
-            st.write("---")
+    # logo.jpg または LOGO_Y(1).jpg のいずれか存在する方を表示
+    logo_path = "logo.jpg" if os.path.exists("logo.jpg") else "LOGO_Y(1).jpg"
+    if os.path.exists(logo_path):
+        st.image(logo_path, width=150)
+    else:
+        st.info("LOGO AREA") # 画像がない場合でもレイアウトを崩さない
 
 with col_title:
     st.markdown("<h1 style='margin-bottom: 0;'>n8-Flow <span style='font-size: 0.6em; color: #666;'>（エイト・フロー）</span></h1>", unsafe_allow_html=True)
@@ -77,7 +77,7 @@ with st.sidebar:
                 return default
 
             st.subheader("👤 氏名設定")
-            map_last_name = st.selectbox("「姓」（必須：予約数カウントの基準）", all_cols, index=get_idx(["姓", "氏名", "氏"], all_cols))
+            map_last_name = st.selectbox("「姓」（予約数カウントの基準）", all_cols, index=get_idx(["姓", "氏名", "氏"], all_cols))
             map_first_name = st.selectbox("「名」の列", ["無し"] + all_cols, index=get_idx(["名"], ["無し"] + all_cols))
             
             st.subheader("📅 日程・状態設定")
@@ -96,7 +96,7 @@ with st.sidebar:
 # --- メインコンテンツ ---
 if uploaded_file is not None:
     try:
-        # 【修正】氏名が入っていない行（空行など）をあらかじめ除外
+        # 氏名が入っている有効な行だけを抽出
         df = df_raw.dropna(subset=[map_last_name]).copy()
         
         if map_first_name == "無し":
@@ -107,7 +107,41 @@ if uploaded_file is not None:
         today = datetime.now()
         df['dt_b'] = pd.to_datetime(df[map_b_date].apply(parse_jp_date))
 
-        # --- 1. 歩留率分析 ---
+        # --- 判定用フラグの作成（厳格な文字判定） ---
+        
+        # 1. 辞退フラグ（いずれかの列に「辞退」があるか）
+        is_withdrawn_any = (
+            df[map_b_st].str.contains('辞退', na=False) | 
+            df[map_s_st].str.contains('辞退', na=False) | 
+            df[map_i1_r].str.contains('辞退', na=False) | 
+            df[map_final_st].str.contains('辞退', na=False)
+        )
+
+        # 2. 参加フラグ（「参加・出席」を含むが、「不参加・欠席・辞退」は除外）
+        is_attended = (
+            df[map_b_st].str.contains('参加|出席', na=False) & 
+            ~df[map_b_st].str.contains('不参加|欠席|辞退', na=False)
+        )
+
+        # 3. 選考希望フラグ（辞退者は除外）
+        is_wanted = df[map_s_st].str.contains('希望', na=False) & ~is_withdrawn_any
+        
+        # 4. 一次面接実施
+        is_interviewed = df[map_i1_d].notna() & ~is_withdrawn_any
+        
+        # 5. 一次合格（辞退者は除外）
+        is_i1_passed = (
+            df[map_i1_r].str.contains('合格|通過|次へ', na=False) & 
+            ~df[map_i1_r].str.contains('不合格|辞退', na=False)
+        )
+
+        # 6. 内定（辞退者は除外）
+        is_offered = df[map_final_st].str.contains('内定|合格', na=False) & ~df[map_final_st].str.contains('辞退', na=False)
+        
+        # 7. 承諾
+        is_accepted = df[map_final_st].str.contains('承諾|入社', na=False) & ~df[map_final_st].str.contains('辞退', na=False)
+
+        # --- 歩留率分析 ---
         st.subheader("📈 歩留まり分析")
         c_sel1, c_sel2 = st.columns(2)
         with c_sel1:
@@ -122,25 +156,16 @@ if uploaded_file is not None:
             else:
                 m_type = st.selectbox("指標", ["内定率（対一次合格）", "内定承諾率（対内定）"])
 
-        # 判定用フラグ
-        # 予約数（分母の基準）: map_last_nameに値がある人（既にdropna済みなので全行対象）
-        is_attended = df[map_b_st].str.contains('参加|出席', na=False)
-        is_wanted = df[map_s_st].str.contains('希望', na=False)
-        is_interviewed = df[map_i1_d].notna()
-        is_i1_passed = df[map_i1_r].str.contains('合格|通過|次へ', na=False)
-        is_offered = df[map_final_st].str.contains('内定|合格', na=False)
-        is_accepted = df[map_final_st].str.contains('承諾|入社', na=False)
-
         num, den = 0, 0
         if stage == "セミナー予約":
-            den = len(df) # 氏名が記載されている有効な行数
+            den = len(df)
             num = is_attended.sum() if "出席率" in m_type else den - is_attended.sum()
         elif stage == "説明会参加":
             den = is_attended.sum()
-            num = is_wanted.sum() if "希望率" in m_type else den - is_wanted.sum()
+            num = is_wanted.sum() if "希望率" in m_type else is_withdrawn_any[is_attended].sum()
         elif stage == "一次選考":
             den = is_interviewed.sum()
-            num = is_i1_passed.sum() if "合格率" in m_type else den - is_i1_passed.sum()
+            num = is_i1_passed.sum() if "合格率" in m_type else is_withdrawn_any[is_interviewed].sum()
         elif stage == "内定/承諾":
             if "内定率" in m_type:
                 den = is_i1_passed.sum()
@@ -154,13 +179,12 @@ if uploaded_file is not None:
             st.metric(f"{stage} {m_type}", f"{val:.1f}%", f"母数: {den} 名 / 対象: {num} 名")
             st.progress(val / 100)
         else:
-            st.warning("有効な氏名データが不足しているため算出できません。")
+            st.warning("有効なデータが不足しているため算出できません。")
 
         # --- 2. 異常検知アラート ---
         st.divider()
         st.subheader("🔍 フォロー対象アラート")
         res1 = df[(df['dt_b'] < today) & (~is_attended) & (df['dt_b'].notna())]
-        # 一次面接日程が入っていない希望者（予約日から14日経過）
         res2 = df[is_wanted & (df[map_i1_d].isna()) & ((today - df['dt_b']).dt.days >= 14)]
         
         ca1, ca2 = st.columns(2)
